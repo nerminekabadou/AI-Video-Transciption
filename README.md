@@ -9,6 +9,7 @@ A modern web application that allows you to upload videos, extract audio transcr
 - **AI Q&A**: Ask questions about the video content and get AI-powered answers using Groq API (Llama 3.3 70B)
 - **Real-time Status**: Track video processing progress with live status updates
 - **Modern UI**: Beautiful gradient interface built with Tailwind CSS
+ - **Troubleshooting & Windows**: Includes guidance for FFmpeg on Windows and common issues
 
 ## Tech Stack
 
@@ -78,6 +79,13 @@ GROQ_API_KEY=your_groq_api_key_here
 FFMPEG_PATH=
 ```
 
+Notes on `FFMPEG_PATH` (Windows)
+- If `ffmpeg.exe` is installed and available on your PATH, you can leave `FFMPEG_PATH` empty.
+- If you installed FFmpeg in a custom location on Windows, set `FFMPEG_PATH` to the path of `ffmpeg.exe` (no surrounding quotes), for example:
+  - `FFMPEG_PATH=C:\\ffmpeg\\bin\\ffmpeg.exe`
+  - You may also include extra flags if needed, e.g. `C:\\ffmpeg\\bin\\ffmpeg.exe -hide_banner -loglevel error`
+- If you set `FFMPEG_PATH` with backslashes, escape them in the `.env` or use forward slashes: `C:/ffmpeg/bin/ffmpeg.exe`.
+
 **Getting API Keys:**
 
 1. **AssemblyAI API Key**:
@@ -94,8 +102,18 @@ FFMPEG_PATH=
 
 ### Start the Backend Server
 
-```bash
+You can start the backend in one of two equivalent ways:
+
+- Direct Python (runs the app using the builtin uvicorn invocation in `main.py`):
+
+```powershell
 python main.py
+```
+
+- Or with Uvicorn for autoreload during development:
+
+```powershell
+uvicorn main:app --reload
 ```
 
 The FastAPI server will run on `http://localhost:8000`
@@ -175,6 +193,8 @@ All configuration is done through environment variables in the `.env` file. Make
    - `GROQ_API_KEY` - Your Groq API key
    - `FFMPEG_PATH` - Optional, only if ffmpeg is not in your system PATH
 
+3. Add `.env` to `.gitignore` to keep keys secure. If your repo does not already ignore `.env`, please add it.
+
 ## Notes
 
 - Video files are temporarily stored during processing and automatically deleted afterward
@@ -182,3 +202,23 @@ All configuration is done through environment variables in the `.env` file. Make
 - Make sure to add `.env` to your `.gitignore` file to keep your API keys secure
 - AssemblyAI offers free tier transcription with generous limits
 - Groq API provides fast inference with free tier access
+
+## Troubleshooting
+
+- Windows FFmpeg errors (e.g. "[WinError 87] Paramètre incorrect"):
+  - Ensure `ffmpeg.exe` exists at the path specified in `FFMPEG_PATH` or is available on your PATH.
+  - In PowerShell you can set the env var for the session and run the server:
+
+```powershell
+$env:FFMPEG_PATH='C:\\path\\to\\ffmpeg.exe'
+python main.py
+```
+
+  - If you see errors from FFmpeg, check the backend `/status/{jobId}` `error` field — it contains the FFmpeg stderr to help diagnose the issue.
+
+- If uploads fail with large videos:
+  - Try a smaller sample file to confirm extraction works.
+  - Increase the extraction timeout in `main.py` or limit upload sizes on the frontend.
+
+- Job persistence:
+  - Jobs are stored in-memory. Restarting the backend clears jobs. For production use, replace the in-memory store with Redis or a database.
