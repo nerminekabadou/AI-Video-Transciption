@@ -5,8 +5,8 @@ A modern web application that allows you to upload videos, extract audio transcr
 ## Features
 
 - **Video Upload**: Upload video files with a modern drag-and-drop interface
-- **Audio Transcription**: Automatically extracts audio and transcribes it using Google Cloud Speech-to-Text
-- **AI Q&A**: Ask questions about the video content and get AI-powered answers using Mistral-7B model
+- **Audio Transcription**: Automatically extracts audio and transcribes it using AssemblyAI
+- **AI Q&A**: Ask questions about the video content and get AI-powered answers using Groq API (Llama 3.3 70B)
 - **Real-time Status**: Track video processing progress with live status updates
 - **Modern UI**: Beautiful gradient interface built with Tailwind CSS
 
@@ -21,9 +21,8 @@ A modern web application that allows you to upload videos, extract audio transcr
 
 ### Backend
 - **FastAPI** - Python web framework
-- **Google Cloud Speech-to-Text** - Audio transcription
-- **Google Cloud Storage** - File storage (for large files)
-- **HuggingFace API** - AI question answering (Mistral-7B-Instruct)
+- **AssemblyAI** - Audio transcription service
+- **Groq API** - AI question answering (Llama 3.3 70B)
 - **FFmpeg** - Audio extraction from video
 
 ## Prerequisites
@@ -54,38 +53,42 @@ npm install
 
 ### 3. Install Backend Dependencies
 
-Create a `requirements.txt` file with the following content:
-
-```txt
-fastapi==0.104.1
-uvicorn==0.24.0
-python-multipart==0.0.6
-google-cloud-speech==2.23.0
-google-cloud-storage==2.14.0
-requests==2.31.0
-```
-
-Then install:
-
 ```bash
 pip install -r requirements.txt
 ```
 
-### 4. Configure Google Cloud
+### 4. Configure Environment Variables
 
-1. Create a Google Cloud project
-2. Enable the **Speech-to-Text API** and **Cloud Storage API**
-3. Create a service account and download the JSON key file
-4. Set the environment variable:
-   ```bash
-   export GOOGLE_APPLICATION_CREDENTIALS="path/to/your/service-account-key.json"
-   ```
-5. Create a Cloud Storage bucket and update `bucket_name` in `main.py` (line 26)
+Create a `.env` file in the root directory with the following content:
 
-### 5. Configure HuggingFace API
+```env
+# AssemblyAI API Key
+# Get your API key from https://www.assemblyai.com/app/account
+ASSEMBLYAI_API_KEY=your_assemblyai_api_key_here
 
-1. Get your API key from [HuggingFace](https://huggingface.co/settings/tokens)
-2. Update the `YOUR_HUGGINGFACE_API_KEY` in `main.py` (line 222)
+# Groq API Key
+# Get your API key from https://console.groq.com/keys
+GROQ_API_KEY=your_groq_api_key_here
+
+# Optional: FFmpeg Path
+# Only set this if ffmpeg is not in your system PATH
+# Leave empty to use system PATH
+# Windows example: FFMPEG_PATH=C:\path\to\ffmpeg.exe
+# Linux/Mac: FFMPEG_PATH=/usr/local/bin/ffmpeg
+FFMPEG_PATH=
+```
+
+**Getting API Keys:**
+
+1. **AssemblyAI API Key**:
+   - Sign up at [AssemblyAI](https://www.assemblyai.com/)
+   - Go to your [account settings](https://www.assemblyai.com/app/account)
+   - Copy your API key
+
+2. **Groq API Key**:
+   - Sign up at [Groq](https://console.groq.com/)
+   - Navigate to [API Keys](https://console.groq.com/keys)
+   - Create a new API key and copy it
 
 ## Running the Application
 
@@ -164,13 +167,18 @@ Ask a question about the video transcript.
 
 ## Configuration
 
-Update these values in `main.py`:
+All configuration is done through environment variables in the `.env` file. Make sure to:
 
-- **Line 26**: `bucket_name = "your_bucket_name"` - Your Google Cloud Storage bucket name
-- **Line 222**: `'Authorization': 'Bearer YOUR_HUGGINGFACE_API_KEY'` - Your HuggingFace API key
+1. Create a `.env` file in the root directory (see step 4 in Installation)
+2. Add your API keys:
+   - `ASSEMBLYAI_API_KEY` - Your AssemblyAI API key
+   - `GROQ_API_KEY` - Your Groq API key
+   - `FFMPEG_PATH` - Optional, only if ffmpeg is not in your system PATH
 
 ## Notes
 
 - Video files are temporarily stored during processing and automatically deleted afterward
-- For videos longer than 1 minute or larger than 10MB, the audio is uploaded to Google Cloud Storage for processing
 - The app uses in-memory storage for job status (consider using Redis or a database for production)
+- Make sure to add `.env` to your `.gitignore` file to keep your API keys secure
+- AssemblyAI offers free tier transcription with generous limits
+- Groq API provides fast inference with free tier access

@@ -83,6 +83,7 @@ export default function Home() {
       setUploadStatus('uploading');
       setUploadProgress(0);
       setError('');
+      console.log('Starting video upload...', video.name, `(${(video.size / 1024 / 1024).toFixed(2)} MB)`);
       
       // Upload the file
       const uploadResponse = await fetch('http://localhost:8000/upload', {
@@ -97,6 +98,7 @@ export default function Home() {
       
       const uploadData = await uploadResponse.json();
       const jobId = uploadData.jobId;
+      console.log('Upload successful! Job ID:', jobId);
       
       // Poll for processing status
       setUploadStatus('processing');
@@ -105,7 +107,7 @@ export default function Home() {
       await pollProcessingStatus(jobId);
       
     } catch (err) {
-      console.error(err);
+      console.error('Upload error:', err);
       setError(err.message || 'Failed to upload video. Please try again.');
       setUploadStatus('error');
     }
@@ -115,8 +117,14 @@ export default function Home() {
     const maxAttempts = 60; // 5 minutes max (60 * 5 seconds)
     let attempts = 0;
     
+    // Helper function to delay
+    const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+    
     const poll = async () => {
       try {
+        attempts++;
+        console.log(`Polling attempt ${attempts}/${maxAttempts} for job ${jobId}`);
+        
         const response = await fetch(`http://localhost:8000/status/${jobId}`);
         
         if (!response.ok) {
@@ -124,25 +132,31 @@ export default function Home() {
         }
         
         const data = await response.json();
+        console.log('Status response:', data);
         
         if (data.status === 'completed') {
           setTranscriptionId(data.transcriptionId);
           setUploadProgress(100);
           setUploadStatus('success');
+          console.log('Processing completed!');
         } else if (data.status === 'failed') {
           throw new Error(data.error || 'Processing failed');
         } else if (data.status === 'processing') {
-          // Update progress
-          setUploadProgress(Math.min(30 + (attempts * 1.5), 90));
-          attempts++;
+          // Update progress (gradually increase from 30% to 90%)
+          const progress = Math.min(30 + (attempts * 1.2), 90);
+          setUploadProgress(progress);
+          console.log(`Processing... Progress: ${progress}%`);
           
           if (attempts < maxAttempts) {
-            setTimeout(poll, 5000); // Poll every 5 seconds
+            // Wait 5 seconds before next poll
+            await delay(5000);
+            await poll(); // Recursively poll again
           } else {
             throw new Error('Processing timeout - please try with a shorter video');
           }
         }
       } catch (err) {
+        console.error('Polling error:', err);
         setError(err.message);
         setUploadStatus('error');
       }
@@ -172,14 +186,17 @@ export default function Home() {
         body: JSON.stringify({ transcriptionId, question }),
       });
       
-      if (!response.ok) throw new Error('Failed to get answer');
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.detail || 'Failed to get answer');
+      }
       const data = await response.json();
       
       setAnswer(data.answer);
       setAskStatus('success');
     } catch (err) {
-      console.error(err);
-      setError('Failed to get answer. Please try again.');
+      console.error('Full error:', err);
+      setError(err.message || 'Failed to get answer. Please try again.');
       setAskStatus('error');
     }
   };

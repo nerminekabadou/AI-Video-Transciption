@@ -5,11 +5,18 @@ import os
 import uuid
 import asyncio
 from typing import Dict
-import google.cloud.speech as speech
-from google.cloud import storage
+# import google.cloud.speech as speech
+# from google.cloud import storage
 import requests
 import subprocess
 import tempfile
+import shutil
+import shlex
+import assemblyai as aai
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 app = FastAPI()
 
@@ -22,11 +29,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Configure AssemblyAI API key from environment variable
+assemblyai_api_key = os.getenv("ASSEMBLYAI_API_KEY")
+if not assemblyai_api_key:
+    raise ValueError("ASSEMBLYAI_API_KEY environment variable is not set")
+aai.settings.api_key = assemblyai_api_key
+
 # Configure Google Cloud Storage
-bucket_name = "your_bucket_name"
+# bucket_name = "your_bucket_name"
 
 # Speech-to-text client setup
-speech_client = speech.SpeechClient()
+# speech_client = speech.SpeechClient()
 
 # Store job status in memory (use Redis or database in production)
 job_status: Dict[str, dict] = {}
@@ -104,20 +117,41 @@ async def process_video(job_id: str, video_file_path: str):
 def extract_audio_from_video(video_path: str, audio_path: str):
     """
     Extract audio from video using ffmpeg
-    Converts to WAV format with proper settings for Google Speech-to-Text
+    Converts to WAV format with proper settings for AssemblyAI
     """
     try:
-        command = [
-            'ffmpeg',
-            '-i', video_path,           # Input video file
-            '-vn',                       # No video
-            '-acodec', 'pcm_s16le',     # Audio codec
-            '-ar', '16000',              # Sample rate 16kHz
-            '-ac', '1',                  # Mono channel
-            '-y',                        # Overwrite output file
-            audio_path
-        ]
-        
+        # Resolve ffmpeg executable and handle possible extra args in FFMPEG_PATH
+        ffmpeg_env = os.getenv("FFMPEG_PATH", "").strip()
+
+        if ffmpeg_env:
+            # On Windows users may paste a quoted path or include extra flags.
+            # Use shlex.split with posix=False to preserve Windows-style parsing.
+            try:
+                ffmpeg_cmd = shlex.split(ffmpeg_env, posix=False)
+            except Exception:
+                # Fallback: use raw string as single command
+                ffmpeg_cmd = [ffmpeg_env.strip('"')]
+
+            # If the executable isn't an absolute path, try to locate it
+            exe = ffmpeg_cmd[0]
+            if not os.path.isabs(exe) and shutil.which(exe):
+                ffmpeg_cmd[0] = shutil.which(exe)
+        else:
+            # Try to find ffmpeg on PATH
+            ff = shutil.which('ffmpeg')
+            if not ff:
+                raise FileNotFoundError('FFmpeg not found in PATH and FFMPEG_PATH not set')
+            ffmpeg_cmd = [ff]
+
+        # Use absolute paths to avoid any relative path issues
+        video_abs = os.path.abspath(video_path)
+        audio_abs = os.path.abspath(audio_path)
+
+        command = (
+            ffmpeg_cmd
+            + ['-i', video_abs, '-vn', '-acodec', 'pcm_s16le', '-ar', '16000', '-ac', '1', '-y', audio_abs]
+        )
+
         result = subprocess.run(
             command,
             stdout=subprocess.PIPE,
@@ -132,63 +166,36 @@ def extract_audio_from_video(video_path: str, audio_path: str):
     except subprocess.TimeoutExpired:
         raise Exception("Audio extraction timed out - video may be too long")
     except subprocess.CalledProcessError as e:
-        raise Exception(f"FFmpeg error: {e.stderr.decode()}")
-    except FileNotFoundError:
-        raise Exception("FFmpeg not found. Please install ffmpeg: apt-get install ffmpeg or brew install ffmpeg")
+        stderr = e.stderr.decode(errors='ignore') if e.stderr else ''
+        stdout = e.stdout.decode(errors='ignore') if e.stdout else ''
+        raise Exception(f"FFmpeg error (exit {e.returncode}): {stderr or stdout}")
+    except FileNotFoundError as e:
+        raise Exception(
+            "FFmpeg not found. Install ffmpeg or set the `FFMPEG_PATH` environment variable to the ffmpeg executable."
+        )
     except Exception as e:
         raise Exception(f"Audio extraction error: {str(e)}")
 
 def transcribe_audio(audio_file_path: str):
     """
-    Transcribe audio file using Google Speech-to-Text API
+    Transcribe audio file using AssemblyAI
+    Much simpler than Google Cloud!
     """
     try:
-        # Check file size
-        file_size = os.path.getsize(audio_file_path)
+        transcriber = aai.Transcriber()
         
-        with open(audio_file_path, 'rb') as audio_file:
-            content = audio_file.read()
-
-        audio = speech.RecognitionAudio(content=content)
+        # AssemblyAI automatically handles file upload and transcription
+        transcript = transcriber.transcribe(audio_file_path)
         
-        config = speech.RecognitionConfig(
-            encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
-            sample_rate_hertz=16000,
-            language_code="en-US",
-            enable_automatic_punctuation=True,
-            model='video',  # Optimized for video
-        )
-
-        # For files larger than 10MB or longer than 1 minute, use long_running_recognize
-        if file_size > 10 * 1024 * 1024:  # 10MB
-            # Upload to Google Cloud Storage for long audio
-            storage_client = storage.Client()
-            bucket = storage_client.bucket(bucket_name)
-            blob_name = f"temp_audio_{uuid.uuid4()}.wav"
-            blob = bucket.blob(blob_name)
-            blob.upload_from_filename(audio_file_path)
-            
-            gcs_uri = f"gs://{bucket_name}/{blob_name}"
-            audio = speech.RecognitionAudio(uri=gcs_uri)
-            
-            operation = speech_client.long_running_recognize(config=config, audio=audio)
-            response = operation.result(timeout=600)  # 10 minute timeout
-            
-            # Clean up GCS file
-            blob.delete()
-        else:
-            # Use synchronous recognition for shorter files
-            response = speech_client.recognize(config=config, audio=audio)
+        # Check for errors
+        if transcript.status == aai.TranscriptStatus.error:
+            raise Exception(f"Transcription failed: {transcript.error}")
         
-        # Combine all transcription results
-        transcript = ""
-        for result in response.results:
-            transcript += result.alternatives[0].transcript + " "
-        
-        if not transcript.strip():
+        # Check if speech was detected
+        if not transcript.text or len(transcript.text.strip()) == 0:
             raise Exception("No speech detected in video. Please ensure the video has clear audio.")
         
-        return transcript.strip()
+        return transcript.text
     
     except Exception as e:
         raise Exception(f"Transcription error: {str(e)}")
@@ -217,55 +224,69 @@ async def ask_question(data: dict):
                 content={"detail": "Missing transcription or question"}
             )
 
-        # Query the Mistral model via HuggingFace API
+        # Use Groq API
+        groq_api_key = os.getenv("GROQ_API_KEY")
+        if not groq_api_key:
+            return JSONResponse(
+                status_code=500,
+                content={"detail": "GROQ_API_KEY environment variable is not set"}
+            )
+        
         headers = {
-            'Authorization': 'Bearer YOUR_HUGGINGFACE_API_KEY'
+            'Authorization': f'Bearer {groq_api_key}', 
+            'Content-Type': 'application/json'
         }
         
-        # Create a focused prompt
-        prompt = f"""Based on this video transcript, answer the question concisely and accurately.
-
-Transcript: {transcription[:2000]}...
-
-Question: {question}
-
-Answer:"""
+        # Limit transcript to avoid token limits
+        max_transcript_length = 4000
+        truncated_transcript = transcription[:max_transcript_length]
         
         payload = {
-            'inputs': prompt,
-            'parameters': {
-                'max_new_tokens': 250,
-                'temperature': 0.7,
-                'top_p': 0.9,
-                'return_full_text': False
-            }
+            'model': 'llama-3.3-70b-versatile',  # Free and powerful
+            'messages': [
+                {
+                    'role': 'system',
+                    'content': 'You are a helpful assistant that answers questions about video content based on transcripts. Provide clear, concise answers.'
+                },
+                {
+                    'role': 'user',
+                    'content': f"Video Transcript:\n{truncated_transcript}\n\nQuestion: {question}\n\nPlease answer based only on the transcript above."
+                }
+            ],
+            'max_tokens': 500,
+            'temperature': 0.7
         }
         
         response = requests.post(
-            'https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.1',
-            headers=headers, 
+            'https://api.groq.com/openai/v1/chat/completions',
+            headers=headers,
             json=payload,
             timeout=30
         )
 
+        print(f"Groq Status: {response.status_code}")
+
         if response.status_code != 200:
-            raise Exception(f"HuggingFace API error: {response.text}")
+            print(f"Groq Error: {response.text}")
+            raise Exception(f"Groq API error ({response.status_code}): {response.text}")
 
         result = response.json()
-        
-        if isinstance(result, list) and len(result) > 0:
-            answer = result[0].get('generated_text', 'No answer generated')
-        else:
-            answer = result.get('generated_text', 'No answer generated')
+        answer = result['choices'][0]['message']['content']
         
         return {"answer": answer}
         
-    except Exception as e:
+    except requests.exceptions.Timeout:
         return JSONResponse(
             status_code=500,
-            content={"detail": f"Error getting answer: {str(e)}"}
+            content={"detail": "Request timed out. Please try again."}
         )
-
+    except Exception as e:
+        print(f"Error in ask_question: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"Error: {str(e)}"}
+        )
+    
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
